@@ -18,3 +18,4 @@ class CitaSerializer(serializers.ModelSerializer):
             'estado',
             'observaciones',
         ]
+        read_only_fields = ['estado']

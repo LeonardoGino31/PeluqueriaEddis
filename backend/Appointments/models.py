@@ -4,15 +4,15 @@ from Barbers.models import Peluquero
 from Services.models import Servicio
 from datetime import datetime, timedelta
 from django.core.exceptions import ValidationError
-from django.db.models import Count
+
 
 class Cita(models.Model):
-    ESTADOS = {
+    ESTADOS = [
         ('PENDIENTE', 'Pendiente'),
         ('CONFIRMADA', 'Confirmada'),
         ('CANCELADA', 'Cancelada'),
         ('COMPLETADA', 'Completada'),
-    }
+    ]
 
     TIPOS_PELUQUERO = [
     ('ESPECIFICO', 'Peluquero específico'),
@@ -134,7 +134,7 @@ class Cita(models.Model):
 
     @classmethod
     def asignar_peluquero_disponible(
-        cls, 
+        cls,
         fecha,
         hora,
         servicio
@@ -144,28 +144,23 @@ class Cita(models.Model):
             hora,
             servicio
         )
-        if not peluqueros:
-            return None
 
-        mejor_peluquero =None
-        menor_cantidad =None
+        peluqueros_con_carga = []
 
         for peluquero in peluqueros:
 
             cantidad_citas = cls.objects.filter(
                 peluquero=peluquero,
-                fecha = fecha
+                fecha=fecha
             ).exclude(
-                estado ='CANCELADA'
+                estado='CANCELADA'
             ).count()
 
-            if(
-                menor_cantidad is None
-                or cantidad_citas < menor_cantidad
-            ):
-                mejor_peluquero= peluquero
-                menor_cantidad = cantidad_citas
-        return mejor_peluquero
+            peluqueros_con_carga.append((cantidad_citas, peluquero))
+
+        peluqueros_con_carga.sort(key=lambda item: item[0])
+
+        return [peluquero for cantidad, peluquero in peluqueros_con_carga]
 
     @classmethod
     def hay_plazas_disponibles(
@@ -240,7 +235,8 @@ class Cita(models.Model):
         fecha,
         hora,
         tipo_peluquero = 'CUALQUIERA',
-        peluquero=None
+        peluquero=None,
+        observaciones=''
     ):
         with transaction.atomic():
             if tipo_peluquero =='ESPECIFICO':
@@ -255,7 +251,7 @@ class Cita(models.Model):
                 .get(pk=peluquero.pk)
             )
                 if not cls.peluquero_especifico_disponible(
-                    peluquero,
+                    peluquero_bloqueado,
                     fecha,
                     hora,
                     servicio
@@ -310,7 +306,8 @@ class Cita(models.Model):
                 fecha=fecha,
                 hora=hora,
                 tipo_peluquero=tipo_peluquero,
-                estado='PENDIENTE'
+                estado='PENDIENTE',
+                observaciones=observaciones
             )
             return cita
 
