@@ -4,6 +4,8 @@ from Barbers.models import Peluquero
 from Services.models import Servicio
 from datetime import datetime, timedelta
 from django.core.exceptions import ValidationError
+from django.utils import timezone
+
 
 
 class Cita(models.Model):
@@ -105,6 +107,14 @@ class Cita(models.Model):
 
         return True
 
+
+    @staticmethod
+    def es_turno_pasado(fecha, hora):
+        inicio = timezone.make_aware(
+            datetime.combine(fecha, hora)
+        )
+        return inicio <= timezone.now()
+
     @classmethod
     def buscar_peluqueros_disponibles(
         cls,
@@ -120,15 +130,14 @@ class Cita(models.Model):
 
         for peluquero in peluqueros:
 
-            cita = cls(
-                servicio=servicio,
-                peluquero= peluquero,
-                fecha=fecha,
-                hora=hora
-            )
-
-            if cita.esta_disponible():
+            if cls.peluquero_especifico_disponible(
+                peluquero,
+                fecha,
+                hora,
+                servicio
+            ):
                 peluqueros_disponibles.append(peluquero)
+
 
         return peluqueros_disponibles
 
@@ -186,9 +195,22 @@ class Cita(models.Model):
         servicio
         ):    
 
+        if cls.es_turno_pasado(fecha, hora):
+            return False
+        
         if not peluquero.activo:
             return False
 
+
+        if not cls.peluquero_trabaja_en(
+            peluquero,
+            fecha,
+            hora,
+            servicio
+        ):
+            return False
+
+        
         cita = cls(
             servicio=servicio,
             peluquero=peluquero,
@@ -310,7 +332,67 @@ class Cita(models.Model):
                 observaciones=observaciones
             )
             return cita
+    @classmethod
+    def peluquero_trabaja_en(
+        cls,
+        peluquero,
+        fecha,
+        hora,
+        servicio
+    ):
+        horario=HorarioAtencion.objects.filter(
+            dia_semana=fecha.weekday()
+        ).first()
+        if not horario:
+            return False
 
+        inicio = datetime.combine(fecha, hora)
+        fin = inicio + timedelta(minutes=servicio.duracion_minutos)
+
+        apertura = datetime.combine(fecha, horario.hora_apertura)
+        cierre = datetime.combine(fecha, horario.hora_cierre)
+
+        return apertura <= inicio and fin <= cierre
+
+    @classmethod
+    def horarios_disponibles(   
+        cls,
+        fecha,
+        servicio,
+        tipo_peluquero='CUALQUIERA',
+        peluquero=None
+    ):
+        horario= HorarioAtencion.objects.filter(
+            dia_semana=fecha.weekday()
+        ).first()
+
+        if not horario:
+            return []
+
+        duracion= timedelta(minutes=servicio.duracion_minutos)
+        turno = datetime.combine(fecha, horario.hora_apertura)
+        cierre = datetime.combine(fecha, horario.hora_cierre)
+
+        horarios = []
+
+        while turno + duracion <= cierre:
+            hora = turno.time()
+            opciones_peluquero = cls.obtener_opciones_peluquero(    
+                tipo_peluquero,
+                peluquero,
+                fecha,
+                hora,
+                servicio
+            )
+
+            if opciones_peluquero:
+                horarios.append(hora)
+
+            turno += duracion
+
+        return horarios
+
+    
     def clean(self):
         if self.peluquero and not self.esta_disponible():
             raise ValidationError(
@@ -321,3 +403,39 @@ class Cita(models.Model):
         
     def __str__(self):
         return f"{self.cliente} - {self.fecha} {self.hora}"
+
+
+class HorarioAtencion(models.Model):
+    DIAS_SEMANA = [
+        (0, 'Lunes'),
+        (1, 'Martes'),
+        (2, 'Miércoles'),
+        (3, 'Jueves'),
+        (4, 'Viernes'),
+        (5, 'Sábado'),
+        (6, 'Domingo'),
+    ]
+
+    dia_semana = models.PositiveSmallIntegerField(
+        choices=DIAS_SEMANA,
+        unique=True
+    )
+    hora_apertura = models.TimeField()
+    hora_cierre = models.TimeField()
+
+    class Meta:
+        ordering = ['dia_semana']
+        verbose_name = 'Horario de atención'
+        verbose_name_plural = 'Horarios de atención'
+
+    def clean(self):
+        if self.hora_apertura >= self.hora_cierre:
+            raise ValidationError(
+                'La hora de apertura debe ser antes de la hora de cierre.'
+            )
+
+    def __str__(self):
+        return (
+            f"{self.get_dia_semana_display()}: "
+            f"{self.hora_apertura:%H:%M} - {self.hora_cierre:%H:%M}"
+        )
