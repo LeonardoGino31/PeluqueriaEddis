@@ -40,8 +40,10 @@ INSTALLED_APPS = [
     'Services',
     'Barbers',
     'Appointments',
+    'WhatsApp',
     "django.contrib.staticfiles",
     'rest_framework',
+
 ]
 
 MIDDLEWARE = [
