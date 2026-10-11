@@ -5,7 +5,7 @@ from Services.models import Servicio
 from datetime import datetime, timedelta
 from django.core.exceptions import ValidationError
 from django.utils import timezone
-
+from django.db.models import Q
 
 
 class Cita(models.Model):
@@ -15,6 +15,8 @@ class Cita(models.Model):
         ('CANCELADA', 'Cancelada'),
         ('COMPLETADA', 'Completada'),
     ]
+
+    HORAS_MINIMAS_CANCELACION = 2
 
     TIPOS_PELUQUERO = [
     ('ESPECIFICO', 'Peluquero específico'),
@@ -62,6 +64,31 @@ class Cita(models.Model):
         inicio = datetime.combine(self.fecha, self.hora)
         fin = inicio + timedelta(minutes=self.servicio.duracion_minutos)
         return fin.time()
+
+    def cancelar(self):
+        if self.estado not in ['PENDIENTE', 'CONFIRMADA']:
+            raise ValidationError(
+                'Solo se pueden cancelar citas pendientes o confirmadas.'
+            )
+
+        if self.es_turno_pasado(self.fecha, self.hora):
+            raise ValidationError(
+                'No se puede cancelar una cita que ya ha pasado.'
+            )
+        inicio= timezone.make_aware(
+            datetime.combine(self.fecha, self.hora)
+        )
+        limite = inicio - timedelta(hours=self.HORAS_MINIMAS_CANCELACION)
+
+        if timezone.now() > limite:
+            raise ValidationError(
+                f'No se puede cancelar una cita con menos de '
+                f'{self.HORAS_MINIMAS_CANCELACION} horas de anticipación.'
+            )
+
+        self.estado = 'CANCELADA'
+        self.save(update_fields=['estado'])
+    
 
     def esta_disponible(self):
         if not self.peluquero:
@@ -249,6 +276,33 @@ class Cita(models.Model):
                 servicio
             )
         return []
+
+    @classmethod
+    def validar_turno(cls, fecha, hora, servicio):
+        if cls.es_turno_pasado(fecha, hora):
+            raise ValidationError(
+                'No se pueden agendar citas en una fecha u hora pasada.'
+            )
+
+        horario= HorarioAtencion.para_fecha(fecha)
+
+        if not horario:
+            raise ValidationError(
+                'No hay horario de atención para ese día.'
+            )
+
+        inicio = datetime.combine(fecha, hora)
+        fin = inicio + timedelta(minutes=servicio.duracion_minutos)
+
+        apertura = datetime.combine(fecha, horario.hora_apertura)
+        cierre = datetime.combine(fecha, horario.hora_cierre)
+
+        if not (apertura <= inicio and fin <= cierre):
+            raise ValidationError(
+                f'Ese día atendemos de {horario.hora_apertura:%H:%M} '
+                f'a {horario.hora_cierre:%H:%M}.'
+            )
+    
     @classmethod
     def crear_cita(
         cls,
@@ -260,6 +314,8 @@ class Cita(models.Model):
         peluquero=None,
         observaciones=''
     ):
+        cls.validar_turno(fecha, hora, servicio)
+
         with transaction.atomic():
             if tipo_peluquero =='ESPECIFICO':
                 if not peluquero:
@@ -272,6 +328,11 @@ class Cita(models.Model):
                 .select_for_update()
                 .get(pk=peluquero.pk)
             )
+                if not peluquero_bloqueado.activo:
+                    raise ValidationError(
+                        'El peluquero ya no está atendiendo.'
+                    )
+                
                 if not cls.peluquero_especifico_disponible(
                     peluquero_bloqueado,
                     fecha,
@@ -340,9 +401,8 @@ class Cita(models.Model):
         hora,
         servicio
     ):
-        horario=HorarioAtencion.objects.filter(
-            dia_semana=fecha.weekday()
-        ).first()
+        horario=HorarioAtencion.para_fecha(fecha)
+        
         if not horario:
             return False
 
@@ -362,9 +422,7 @@ class Cita(models.Model):
         tipo_peluquero='CUALQUIERA',
         peluquero=None
     ):
-        horario= HorarioAtencion.objects.filter(
-            dia_semana=fecha.weekday()
-        ).first()
+        horario= HorarioAtencion.para_fecha(fecha)
 
         if not horario:
             return []
@@ -391,6 +449,24 @@ class Cita(models.Model):
             turno += duracion
 
         return horarios
+
+    @classmethod
+    def citas_proximas(cls, cliente):
+        ahora = timezone.localtime()
+        hoy = ahora.date()
+        hora_actual = ahora.time()
+
+        return( 
+            cls.objects.filter(
+                cliente=cliente,
+                estado__in=['PENDIENTE', 'CONFIRMADA'],
+            ).filter(
+                Q(fecha__gt=hoy) | Q(fecha=hoy, hora__gte=hora_actual)
+            )
+            .select_related('servicio', 'peluquero')
+            .order_by('fecha', 'hora')
+
+        )
 
     
     def clean(self):
@@ -433,6 +509,12 @@ class HorarioAtencion(models.Model):
             raise ValidationError(
                 'La hora de apertura debe ser antes de la hora de cierre.'
             )
+
+    @classmethod
+    def para_fecha(cls, fecha):
+        return cls.objects.filter(
+            dia_semana=fecha.weekday()
+        ).first()
 
     def __str__(self):
         return (
