@@ -9,6 +9,8 @@ import logging
 from .models import MensajeProcesado
 from .bot import procesar_mensaje, texto
 from .meta import enviar_respuesta
+import hashlib
+import hmac
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +38,10 @@ def verificar_webhook(request):
     return HttpResponse('Token de verificación inválido', status=403)
 
 def recibir_mensaje(request):
+    if not firma_valida(request):
+        logger.warning('Webhook rechazado: firma inválida')
+        return HttpResponse(status=403)
+    
     try:
         datos = json.loads(request.body)
     except json.JSONDecodeError:
@@ -109,3 +115,19 @@ def atender_mensaje(telefono, nombre, entrada):
 
     for respuesta in respuestas:
         enviar_respuesta(telefono, respuesta)
+
+def firma_valida(request):
+    firma = request.headers.get('X-Hub-Signature-256', '')
+
+    if not firma.startswith('sha256='):
+        return False
+
+    esperada = hmac.new(
+        settings.WHATSAPP_APP_SECRET.encode(),
+        request.body,
+        hashlib.sha256
+
+    ).hexdigest()
+
+    return secrets.compare_digest(firma.removeprefix('sha256='), esperada)
+
