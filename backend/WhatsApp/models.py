@@ -57,3 +57,16 @@ class ConversacionWhatsApp(models.Model):
         return f"Conversación de {self.cliente.nombre} ({self.cliente.telefono}) - Paso: {self.get_paso_display()}"
 
     
+class MensajeProcesado(models.Model):
+    wamid = models.CharField(max_length=255, unique =True)
+    recibido = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Mensaje procesado'
+        verbose_name_plural = 'Mensajes procesados'  
+
+    def __str__(self):
+        return self.wamid
+
+
+    

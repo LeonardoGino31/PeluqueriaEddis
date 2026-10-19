@@ -6,7 +6,7 @@ from django.http import HttpResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 import logging
-
+from .models import MensajeProcesado
 from .bot import procesar_mensaje, texto
 from .meta import enviar_respuesta
 
@@ -41,14 +41,20 @@ def recibir_mensaje(request):
     except json.JSONDecodeError:
         return HttpResponse(status=400)
 
-    for telefono, nombre, entrada in extraer_mensajes(datos):
+    for wamid, telefono, nombre, entrada in extraer_mensajes(datos):
+        _, es_nuevo = MensajeProcesado.objects.get_or_create(wamid=wamid)
+
+        if not es_nuevo:
+            print(f'🔁 Mensaje duplicado ignorado: {wamid}')
+            continue
+
         print(f'📩 {nombre} ({telefono}): {entrada}')
 
         try:
             atender_mensaje(telefono, nombre, entrada)
         except Exception:
             logger.exception('Error procesando mensaje de WhatsApp')
-
+            
     return HttpResponse(status=200)
 
 
@@ -64,7 +70,12 @@ def extraer_mensajes(datos):
 
             for mensaje in valor.get('messages', []):
                 telefono = mensaje.get('from')
-                yield telefono, nombres.get(telefono, ''), extraer_entrada(mensaje)
+                yield (
+                    mensaje.get('id'),
+                    telefono,
+                    nombres.get(telefono, ''),
+                    extraer_entrada(mensaje),
+                )
 
 
 def extraer_entrada(mensaje):
