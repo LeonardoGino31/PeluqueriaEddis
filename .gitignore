@@ -3,3 +3,4 @@
 *.pyc
 backend/db.sqlite3
 .env
+staticfiles/
